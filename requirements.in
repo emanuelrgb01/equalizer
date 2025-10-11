@@ -1,0 +1,6 @@
+# Requires Python >=3.12
+numpy
+scipy
+matplotlib
+soundfile
+librosa
