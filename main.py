@@ -24,6 +24,20 @@ def peaking_eq(f0, Q, gain_db, fs):
     return b, a
 
 
+def plot_filter_freqz(my_filter, sample_rate, filter_name: str, wornN=8000):
+    w, h = signal.freqz(my_filter, worN=wornN, fs=sample_rate)
+
+    plt.figure(figsize=(10, 6))
+    plt.plot(w, 20 * np.log10(np.abs(h)))
+    plt.title("Frequency Response of FIR Band-Pass Filter")
+    plt.xlabel("Frequency (Hz)")
+    plt.ylabel("Magnitude (dB)")
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(f"results/FIR_Filter_{filter_name}.png")
+    plt.close()
+
+
 def equalize_audio(input_path: str, mode: str, eq_params: dict):
     """
     Apply a 3-band audio equalizer (FIR or IIR) to an audio file.
@@ -70,6 +84,10 @@ def equalize_audio(input_path: str, mode: str, eq_params: dict):
             high = signal.firwin(
                 numtaps, cutoff=f2 / nyq, pass_zero="highpass", window="hamming"
             )
+
+            plot_filter_freqz(low, sample_rate, f"low/{audio_name}")
+            plot_filter_freqz(band, sample_rate, f"band/{audio_name}")
+            plot_filter_freqz(high, sample_rate, f"high/{audio_name}")
 
             sig_low = signal.fftconvolve(sig_channel, low, mode="same") * gain_low
             sig_mid = signal.fftconvolve(sig_channel, band, mode="same") * gain_mid
