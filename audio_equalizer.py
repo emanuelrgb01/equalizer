@@ -32,6 +32,13 @@ class AudioEqualizer:
         self.gain_mid = 10 ** (self.gain_mid_db / 20.0)
         self.gain_high = 10 ** (self.gain_high_db / 20.0)
 
+        # HEADROOM
+        max_boost_db = max(0.0, self.gain_low_db, self.gain_mid_db, self.gain_high_db)
+        # Calculate an attenuation gain to create headroom and avoid clipping.
+        # If the largest boost is +X dB, the headroom_gain will be -X dB (on a linear scale).
+        # If there is no boost (only clipping), the gain is 1.0 (no attenuation).
+        self.headroom_gain = 10 ** (-max_boost_db / 20.0)
+
         self.mode = mode.upper()
         if self.mode not in ("FIR", "IIR"):
             raise ValueError("mode must be 'FIR' or 'IIR'")
@@ -92,8 +99,9 @@ class AudioEqualizer:
         sig_mid = signal.fftconvolve(x, band_h, mode="same") * self.gain_mid
         sig_high = signal.fftconvolve(x, high_h, mode="same") * self.gain_high
         out = sig_low + sig_mid + sig_high
-        # avoid normalization that hides gains; only clip to prevent overflow
-        out = np.clip(out, -1.0, 1.0)
+
+        # Applies headroom gain to avoid clipping, instead of using np.clip.
+        out *= self.headroom_gain
         return out
 
     def _process_channel_iir(self, x, sr):
@@ -105,8 +113,9 @@ class AudioEqualizer:
         for f0, Q, gdb in bands:
             b, a = self._peaking_eq(f0, Q, gdb, sr)
             y = signal.lfilter(b, a, y)
-        # clip to avoid numeric overflow, preserve relative gains
-        y = np.clip(y, -1.0, 1.0)
+
+        # Applies headroom gain to avoid clipping, instead of using np.clip.
+        y *= self.headroom_gain
         return y
 
     def process(self, audio, sr):
@@ -144,29 +153,36 @@ class AudioEqualizer:
             H_mid = np.fft.rfft(band_h * self.gain_mid, n=N)
             H_high = np.fft.rfft(high_h * self.gain_high, n=N)
             H_tot = H_low + H_mid + H_high
+
+            # Applies headroom gain to correct plotting.
+            H_tot *= self.headroom_gain
+
             mag_db = 20 * np.log10(np.maximum(np.abs(H_tot), 1e-12))
 
             freqs = np.fft.rfftfreq(N, 1 / sr)
-            plt.title("Combined FIR Equalizer Response (with gains)")
-
+            plt.title("Combined FIR Equalizer Response (with Headroom Gain)")
         else:
             # IIR mode
             H_tot = np.ones(N // 2, dtype=complex)
 
-            bands = self.iir_bands
-            for f0, Q, gdb in bands:
+            for f0, Q, gdb in self.iir_bands:
                 b, a = self._peaking_eq(f0, Q, gdb, sr)
                 w, h = signal.freqz(b, a, worN=N // 2, fs=sr)
                 H_tot *= h
+
+            # Applies headroom gain to correct plotting.
+            H_tot *= self.headroom_gain
             mag_db = 20 * np.log10(np.maximum(np.abs(H_tot), 1e-12))
 
             freqs = w
-            plt.title("Combined IIR Equalizer Response (with gains)")
+            plt.title("Combined IIR Equalizer Response (with Headroom Gain)")
 
         plt.semilogx(freqs, mag_db)
         plt.xlabel("Frequency (Hz)")
         plt.ylabel("Magnitude (dB)")
         plt.grid(True, which="both", ls="--", lw=0.5)
+        plt.axhline(0, color="red", linestyle=":", linewidth=0.8, label="0 dB")
+        plt.legend()
         plt.tight_layout()
         plt.savefig(f"results/{audio_name}_{self.mode}_filter.png", dpi=200)
         plt.close()
