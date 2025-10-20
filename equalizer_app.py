@@ -77,6 +77,9 @@ class EqualizerGUI:
         tk.Button(btn_frame, text="Play Equalized", command=self.play_equalized).pack(
             side="left", padx=6
         )
+        tk.Button(btn_frame, text="Stop", command=self.stop_playback).pack(
+            side="left", padx=6
+        )
 
         self.status_label = tk.Label(root, text="", fg="green")
         self.status_label.pack(pady=6)
@@ -101,6 +104,7 @@ class EqualizerGUI:
         ).pack()
 
     def select_file(self):
+        self.stop_playback()
         path = filedialog.askopenfilename(
             filetypes=[("Audio files", "*.wav *.mp3 *.m4a"), ("All files", "*.*")]
         )
@@ -154,22 +158,21 @@ class EqualizerGUI:
 
             # audio is (n, channels)
             processed = eq.process(self.audio_data, self.sample_rate)
+
+            if not os.path.exists("results"):
+                os.makedirs("results")
+
             name = os.path.splitext(os.path.basename(self.filepath))[0]
             out_path = f"results/{name}_{mode.lower()}_eq.wav"
 
             sf.write(out_path, processed, self.sample_rate)
             self.last_equalized_path = out_path
-            # also save original into results for convenience
-            orig_path = f"results/{name}_original.wav"
-            sf.write(orig_path, self.audio_data, self.sample_rate)
 
-            # save filter response plot (FIR or IIR)
             try:
                 eq.plot_filter_responses(self.sample_rate, audio_name=name)
             except Exception as e:
                 print(f"Warning: could not plot filter response ({e})")
 
-            # plot comparative spectra (two subplots)
             self._plot_compare_spectra(self.audio_data, processed, name)
 
             self.status_label.config(text=f"Done — saved: {out_path}")
@@ -183,17 +186,19 @@ class EqualizerGUI:
         freqs = np.fft.rfftfreq(n, 1 / self.sample_rate)
 
         num_channels = orig.shape[1]
-        fig, axs = plt.subplots(num_channels, 1, figsize=(10, 4 * num_channels))
-        if num_channels == 1:
-            axs = [axs]
+        fig, axs = plt.subplots(
+            num_channels, 1, figsize=(10, 4 * num_channels), squeeze=False
+        )
 
         for ch in range(num_channels):
             spec_orig = 20 * np.log10(np.abs(np.fft.rfft(orig[:, ch])) + 1e-12)
             spec_proc = 20 * np.log10(np.abs(np.fft.rfft(proc[:, ch])) + 1e-12)
-            ax = axs[ch]
+            ax = axs[ch, 0]
             ax.semilogx(freqs, spec_orig, label="Original", alpha=0.7)
             ax.semilogx(freqs, spec_proc, label="Equalized", alpha=0.7)
-            label_name = "Left" if ch == 0 else "Right"
+            label_name = (
+                "Mono" if num_channels == 1 else ("Left" if ch == 0 else "Right")
+            )
             ax.set_title(f"Channel: {label_name}")
             ax.set_xlabel("Frequency (Hz)")
             ax.set_ylabel("Magnitude (dB)")
@@ -206,21 +211,20 @@ class EqualizerGUI:
         plt.close(fig)
 
     def _play_audio_array(self, arr, sr):
-        """
-        Play a numpy array audio (shape (n,) or (n,2)). Runs in background thread.
-        Uses sounddevice; if unavailable, shows error.
-        """
         try:
+            self.status_label.config(text="Playing...")
             sd.play(arr, sr)
             sd.wait()
+            self.status_label.config(text="Playback finished.")
         except Exception as e:
-            messagebox.showerror("Playback error", f"Playback failed: {e}")
+            if "Interrupted by stop()" not in str(e):
+                messagebox.showerror("Playback error", f"Playback failed: {e}")
 
     def play_original(self):
         if self.audio_data is None:
             messagebox.showwarning("No audio", "No audio loaded.")
             return
-        # play in background thread
+        self.stop_playback()
         threading.Thread(
             target=self._play_audio_array,
             args=(self.audio_data, self.sample_rate),
@@ -229,20 +233,23 @@ class EqualizerGUI:
 
     def play_equalized(self):
         if not self.last_equalized_path:
-            messagebox.showwarning(
-                "No equalized audio", "No equalized audio yet. Apply EQ first."
-            )
+            messagebox.showwarning("No equalized audio", "Apply EQ first.")
             return
         try:
+            self.stop_playback()
             data, sr = librosa.load(self.last_equalized_path, sr=None, mono=False)
             if data.ndim == 1:
-                arr = data
+                arr = data[:, np.newaxis]
             else:
-                arr = data.T  # (n, ch)
+                arr = data.T
             threading.Thread(
                 target=self._play_audio_array, args=(arr, sr), daemon=True
             ).start()
         except Exception as e:
             messagebox.showerror(
-                "Playback error", f"Could not load equalized audio for playback: {e}"
+                "Playback error", f"Could not load equalized audio: {e}"
             )
+
+    def stop_playback(self):
+        sd.stop()
+        self.status_label.config(text="Playback stopped.")
